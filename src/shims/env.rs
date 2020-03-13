@@ -29,7 +29,7 @@ impl<'tcx> EnvVars<'tcx> {
             for (name, value) in env::vars() {
                 if !excluded_env_vars.contains(&name) {
                     let var_ptr =
-                        alloc_env_var_as_c_str(name.as_ref(), value.as_ref(), ecx);
+                        alloc_env_var_as_target_str(name.as_ref(), value.as_ref(), ecx)?;
                     ecx.machine.env_vars.map.insert(OsString::from(name), var_ptr);
                 }
             }
@@ -38,15 +38,18 @@ impl<'tcx> EnvVars<'tcx> {
     }
 }
 
-fn alloc_env_var_as_c_str<'mir, 'tcx>(
+fn alloc_env_var_as_target_str<'mir, 'tcx>(
     name: &OsStr,
     value: &OsStr,
     ecx: &mut InterpCx<'mir, 'tcx, Evaluator<'tcx>>,
-) -> Pointer<Tag> {
+) -> InterpResult<'tcx, Pointer<Tag>> {
     let mut name_osstring = name.to_os_string();
     name_osstring.push("=");
     name_osstring.push(value);
-    ecx.alloc_os_str_as_c_str(name_osstring.as_os_str(), MiriMemoryKind::Machine.into())
+    Ok(ecx
+        .alloc_os_str_as_target_str(name_osstring.as_os_str(), MiriMemoryKind::Machine.into())?
+        .ptr
+        .assert_ptr())
 }
 
 impl<'mir, 'tcx> EvalContextExt<'mir, 'tcx> for crate::MiriEvalContext<'mir, 'tcx> {}
@@ -55,14 +58,19 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx
         let this = self.eval_context_mut();
 
         let name_ptr = this.read_scalar(name_op)?.not_undef()?;
-        let name = this.read_os_str_from_c_str(name_ptr)?;
-        Ok(match this.machine.env_vars.map.get(name) {
+        let name = this.read_os_str_from_target_str(name_ptr)?;
+        Ok(match this.machine.env_vars.map.get(&name) {
             // The offset is used to strip the "{name}=" part of the string.
             Some(var_ptr) => {
                 Scalar::from(var_ptr.offset(Size::from_bytes(u64::try_from(name.len()).unwrap().checked_add(1).unwrap()), this)?)
             }
             None => Scalar::ptr_null(&*this.tcx),
         })
+    }
+
+
+    fn getenvironmentvariablew() {
+
     }
 
     fn setenv(
@@ -74,16 +82,16 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx
 
         let name_ptr = this.read_scalar(name_op)?.not_undef()?;
         let value_ptr = this.read_scalar(value_op)?.not_undef()?;
-        let value = this.read_os_str_from_c_str(value_ptr)?;
+        let value = this.read_os_str_from_target_str(value_ptr)?;
         let mut new = None;
         if !this.is_null(name_ptr)? {
-            let name = this.read_os_str_from_c_str(name_ptr)?;
+            let name = this.read_os_str_from_target_str(name_ptr)?;
             if !name.is_empty() && !name.to_string_lossy().contains('=') {
                 new = Some((name.to_owned(), value.to_owned()));
             }
         }
         if let Some((name, value)) = new {
-            let var_ptr = alloc_env_var_as_c_str(&name, &value, &mut this);
+            let var_ptr = alloc_env_var_as_target_str(&name, &value, &mut this)?;
             if let Some(var) = this.machine.env_vars.map.insert(name.to_owned(), var_ptr) {
                 this.memory
                     .deallocate(var, None, MiriMemoryKind::Machine.into())?;
@@ -95,13 +103,17 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx
         }
     }
 
+    fn setenvironmentvariablew() {
+
+    }
+
     fn unsetenv(&mut self, name_op: OpTy<'tcx, Tag>) -> InterpResult<'tcx, i32> {
         let this = self.eval_context_mut();
 
         let name_ptr = this.read_scalar(name_op)?.not_undef()?;
         let mut success = None;
         if !this.is_null(name_ptr)? {
-            let name = this.read_os_str_from_c_str(name_ptr)?.to_owned();
+            let name = this.read_os_str_from_target_str(name_ptr)?.to_owned();
             if !name.is_empty() && !name.to_string_lossy().contains('=') {
                 success = Some(this.machine.env_vars.map.remove(&name));
             }

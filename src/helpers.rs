@@ -1,4 +1,4 @@
-use std::ffi::OsStr;
+use std::ffi::{OsStr, OsString};
 use std::{iter, mem};
 use std::convert::TryFrom;
 
@@ -456,6 +456,17 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx
         }
     }
 
+    /// Dispatches to appropriate implementations for reading an OsString from Memory,
+    /// depending on the interpretation target.
+    fn read_os_str_from_target_str<'a>(&'a self, scalar: Scalar<Tag>) -> InterpResult<'tcx, OsString> {
+        let target_os = self.eval_context_ref().tcx.sess.target.target.target_os.as_str();
+        match target_os {
+            "linux" | "macos" => self.read_os_str_from_c_str(scalar).map(|x| x.to_os_string()),
+            "windows" => self.read_os_str_from_wide_str(scalar),
+            _ => throw_unsup_format!("OsString support for target OS not yet available"),
+        }
+    }
+
     /// Helper function to read an OsString from a null-terminated sequence of bytes, which is what
     /// the Unix APIs usually handle.
     fn read_os_str_from_c_str<'a>(&'a self, scalar: Scalar<Tag>) -> InterpResult<'tcx, &'a OsStr>
@@ -471,12 +482,46 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx
         fn bytes_to_os_str<'tcx, 'a>(bytes: &'a [u8]) -> InterpResult<'tcx, &'a OsStr> {
             let s = std::str::from_utf8(bytes)
                 .map_err(|_| err_unsup_format!("{:?} is not a valid utf-8 string", bytes))?;
-            Ok(&OsStr::new(s))
+            Ok(OsStr::new(s))
         }
 
         let this = self.eval_context_ref();
         let bytes = this.memory.read_c_str(scalar)?;
         bytes_to_os_str(bytes)
+    }
+
+    /// Helper function to read an OsString from a 0x0000-terminated sequence of u16,
+    /// which is what the Windows APIs usually handle.
+    fn read_os_str_from_wide_str<'a>(&'a self, scalar: Scalar<Tag>) -> InterpResult<'tcx, OsString> {
+        #[cfg(target_os = "windows")]
+        fn u16vec_to_osstring<'tcx>(u16_vec: Vec<u16>) -> InterpResult<'tcx, OsString> {
+            Ok(std::os::windows::ffi::OsStringExt::from_wide(&u16_vec[..]))
+        }
+        #[cfg(not(target_os = "windows"))]
+        fn u16vec_to_osstring<'tcx>(u16_vec: Vec<u16>) -> InterpResult<'tcx, OsString> {
+            let s = String::from_utf16(&u16_vec[..])
+                .map_err(|_| err_unsup_format!("{:?} is not a valid utf-16 string", u16_vec))?;
+            Ok(s.into())
+        }
+
+        let u16_vec = self.eval_context_ref().memory.read_wide_str(scalar)?;
+        u16vec_to_osstring(u16_vec)
+    }
+
+    /// Dispatches to appropriate implementations for writing an OsString to Memory,
+    /// depending on the interpretation target.
+    fn write_os_str_to_target_str(
+        &mut self,
+        os_str: &OsStr,
+        mplace: MPlaceTy<'tcx, Tag>,
+        size: u64,
+    ) -> InterpResult<'tcx, (bool, u64)> {
+        let target_os = self.eval_context_ref().tcx.sess.target.target.target_os.as_str();
+        match target_os {
+            "linux" | "macos" => self.write_os_str_to_c_str(os_str, mplace.ptr, size),
+            "windows" => self.write_os_str_to_wide_str(os_str, mplace, size),
+            _ => throw_unsup_format!("OsString support for target OS not yet available"),
+        }
     }
 
     /// Helper function to write an OsStr as a null-terminated sequence of bytes, which is what
@@ -518,6 +563,66 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx
         Ok((true, string_length))
     }
 
+    /// Helper function to write an OsStr as a 0x0000-terminated u16-sequence, which is what
+    /// the Windows APIs usually handle. This function returns `Ok((false, length))` without trying
+    /// to write if `size` is not large enough to fit the contents of `os_string` plus a null
+    /// terminator. It returns `Ok((true, length))` if the writing process was successful. The
+    /// string length returned does not include the null terminator.
+    fn write_os_str_to_wide_str(
+        &mut self,
+        os_str: &OsStr,
+        mplace: MPlaceTy<'tcx, Tag>,
+        size: u64,
+    ) -> InterpResult<'tcx, (bool, u64)> {
+        #[cfg(target_os = "windows")]
+        fn os_str_to_u16vec<'tcx>(os_str: &OsStr) -> InterpResult<'tcx, Vec<u16>> {
+            Ok(std::os::windows::ffi::OsStrExt::encode_wide(os_str).collect())
+        }
+        #[cfg(not(target_os = "windows"))]
+        fn os_str_to_u16vec<'tcx>(os_str: &OsStr) -> InterpResult<'tcx, Vec<u16>> {
+            // On non-unix platforms the best we can do to transform Vec<u16> from/to OS strings is to do the
+            // intermediate transformation into strings. Which invalidates non-utf8 paths that are actually
+            // valid.
+            os_str
+                .to_str()
+                .map(|s| s.encode_utf16().collect())
+                .ok_or_else(|| err_unsup_format!("{:?} is not a valid utf-8 string", os_str).into())
+        }
+
+        let u16_vec = os_str_to_u16vec(os_str)?;
+        // If `size` is smaller or equal than `bytes.len()`, writing `bytes` plus the required
+        // 0x0000 terminator to memory would cause an out-of-bounds access.
+        let string_length = u16_vec.len() as u64;
+        if size <= string_length {
+            return Ok((false, string_length));
+        }
+
+        let this = self.eval_context_mut();
+
+        // Store the UTF-16 string.
+        let char_size = Size::from_bytes(2);
+        for (idx, c) in u16_vec.into_iter().chain(iter::once(0x0000)).enumerate() {
+            let place = this.mplace_field(mplace, idx as u64)?; 
+            this.write_scalar(Scalar::from_uint(c, char_size), place.into())?;
+        }
+        Ok((true, string_length))
+    }
+
+    /// Dispatches to appropriate implementations for allocating & writing OsString in Memory,
+    /// depending on the interpretation target.
+    fn alloc_os_str_as_target_str(
+        &mut self,
+        os_str: &OsStr,
+        memkind: MemoryKind<MiriMemoryKind>,
+    ) -> InterpResult<'tcx, MPlaceTy<'tcx, Tag>> {
+        let target_os = self.eval_context_ref().tcx.sess.target.target.target_os.as_str();
+        match target_os {
+            "linux" | "macos" => self.alloc_os_str_as_c_str(os_str, memkind),
+            "windows" => self.alloc_os_str_as_wide_str(os_str, memkind),
+            _ => throw_unsup_format!("OsString support for target OS not yet available"),
+        }
+    }
+
     fn alloc_os_str_as_c_str(
         &mut self,
         os_str: &OsStr,
@@ -529,7 +634,21 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx
         let arg_type = this.tcx.mk_array(this.tcx.types.u8, size);
         let arg_place = this.allocate(this.layout_of(arg_type).unwrap(), memkind);
         self.write_os_str_to_c_str(os_str, arg_place.ptr, size).unwrap();
-        arg_place.ptr.assert_ptr()
+        Ok(arg_place)
+    }
+
+    fn alloc_os_str_as_wide_str(
+        &mut self,
+        os_str: &OsStr,
+        memkind: MemoryKind<MiriMemoryKind>,
+    ) -> InterpResult<'tcx, MPlaceTy<'tcx, Tag>> {
+        let size = os_str.len() as u64 + 1; // Make space for `0x0000` terminator.
+        let this = self.eval_context_mut();
+
+        let arg_type = this.tcx.mk_array(this.tcx.types.u16, size);
+        let arg_place = this.allocate(this.layout_of(arg_type).unwrap(), memkind);
+        self.write_os_str_to_wide_str(os_str, arg_place, size).unwrap();
+        Ok(arg_place)
     }
 }
 
