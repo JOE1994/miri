@@ -224,7 +224,16 @@ impl<'mir, 'tcx> Machine<'mir, 'tcx> for Evaluator<'tcx> {
 
     #[inline(always)]
     fn enforce_validity(ecx: &InterpCx<'mir, 'tcx, Self>) -> bool {
-        ecx.machine.validate
+        // This function was modified from the original MIRI code for custom use
+
+        let is_local = if ecx.stack().is_empty() {
+            true
+        } else {
+            // ecx.frame().instance.def.def_id().is_top_level_module()
+            ecx.frame().instance.def.def_id().is_local()
+        };
+
+        ecx.machine.validate && is_local
     }
 
     #[inline(always)]
