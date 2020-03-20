@@ -63,6 +63,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx
         let name = this.read_os_str_from_target_str(name_ptr)?;
         Ok(match this.machine.env_vars.map.get(&name) {
             Some(var_ptr) => {
+                // The offset is used to strip the "{name}=" part of the string.
                 Scalar::from(var_ptr.offset(Size::from_bytes(u64::try_from(name.len()).unwrap().checked_add(1).unwrap()), this)?)
             }
             None => Scalar::ptr_null(&*this.tcx),
