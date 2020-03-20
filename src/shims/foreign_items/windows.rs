@@ -1,7 +1,9 @@
 use crate::*;
+use crate::rustc_target::abi::LayoutOf;
 use rustc::mir;
 use rustc::ty::layout::Size;
 use std::iter;
+use std::convert::TryFrom;
 
 impl<'mir, 'tcx> EvalContextExt<'mir, 'tcx> for crate::MiriEvalContext<'mir, 'tcx> {}
 pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx> {
@@ -21,18 +23,11 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx
             // DWORD = ULONG = u32
             // BOOL = i32
 
-            "GetEnvironmentStringsW" => {
-                // this.write_scalar(this.machine.env_vars.environ.unwrap().vtable(), dest)?;
-            }
-
             // Environment related shims
             "GetEnvironmentVariableW" => {
                 let result = this.getenvironmentvariablew(args[0], args[1], args[2])?;
                 if result == 0 {
                     this.set_last_error(Scalar::from_u32(203))?; // ERROR_ENVVAR_NOT_FOUND
-                    // this.write_null(dest)?;
-                } else {
-                    // this.write_scalar(Scalar::from_uint(result, dest.layout.size), dest)?;
                 }
                 this.write_scalar(Scalar::from_uint(result, dest.layout.size), dest)?;
             }
@@ -40,6 +35,35 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx
             "SetEnvironmentVariableW" => {
                 let result = this.setenvironmentvariablew(args[0], args[1])?;
                 this.write_scalar(Scalar::from_int(result, dest.layout.size), dest)?;
+            }
+
+            "GetEnvironmentStringsW" => {
+                // Info on layout of environment blocks in Windows: 
+                // https://docs.microsoft.com/en-us/windows/win32/procthread/environment-variables
+                let mut env_vars = std::ffi::OsString::new();
+                for &item in this.machine.env_vars.values()? {
+                    let env_var = this.read_os_str_from_target_str(Scalar::from(item))?;
+                    env_vars.push(env_var);
+                    env_vars.push(" ");
+                }
+
+                // Allocate environment block
+                let tcx = this.tcx;
+                let env_block_size = env_vars.len() + 1;
+                let env_block_type = tcx.mk_array(tcx.types.u16, u64::try_from(env_block_size).unwrap());
+                let env_block_place = this.allocate(this.layout_of(env_block_type)?, MiriMemoryKind::Machine.into());
+                
+                // Store environment variables to environment block
+                // Final null terminator(block terminator) is pushed by `write_os_str_to_wide_str`
+                this.write_os_str_to_wide_str(&env_vars, env_block_place, u64::try_from(env_block_size).unwrap())?;
+
+                // If the function succeeds, the return value is a pointer to the environment block of the current process.
+                this.write_scalar(env_block_place.ptr, dest)?;
+            }
+
+            "FreeEnvironmentStringsW" => {
+                // let old_vars_ptr = this.read_scalar(args[0])?.not_undef()?;
+                // this.memory.deallocate(this.force_ptr(old_vars_ptr)?, None, MiriMemoryKind::Machine.into())?;
             }
 
             // File related shims

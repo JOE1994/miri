@@ -458,7 +458,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx
 
     /// Dispatches to appropriate implementations for reading an OsString from Memory,
     /// depending on the interpretation target.
-    fn read_os_str_from_target_str<'a>(&'a self, scalar: Scalar<Tag>) -> InterpResult<'tcx, OsString> {
+    fn read_os_str_from_target_str(&self, scalar: Scalar<Tag>) -> InterpResult<'tcx, OsString> {
         let target_os = self.eval_context_ref().tcx.sess.target.target.target_os.as_str();
         match target_os {
             "linux" | "macos" => self.read_os_str_from_c_str(scalar).map(|x| x.to_os_string()),
@@ -492,7 +492,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx
 
     /// Helper function to read an OsString from a 0x0000-terminated sequence of u16,
     /// which is what the Windows APIs usually handle.
-    fn read_os_str_from_wide_str<'a>(&'a self, scalar: Scalar<Tag>) -> InterpResult<'tcx, OsString> {
+    fn read_os_str_from_wide_str(&self, scalar: Scalar<Tag>) -> InterpResult<'tcx, OsString> {
         #[cfg(target_os = "windows")]
         fn u16vec_to_osstring<'tcx>(u16_vec: Vec<u16>) -> InterpResult<'tcx, OsString> {
             Ok(std::os::windows::ffi::OsStringExt::from_wide(&u16_vec[..]))

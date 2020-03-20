@@ -1,6 +1,7 @@
 use std::ffi::{OsString, OsStr};
 use std::env;
 use std::convert::TryFrom;
+use std::collections::hash_map::Values;
 
 use crate::stacked_borrows::Tag;
 use crate::rustc_target::abi::LayoutOf;
@@ -35,6 +36,10 @@ impl<'tcx> EnvVars<'tcx> {
             }
         }
         ecx.update_environ()
+    }
+
+    pub(super) fn values(&self) -> InterpResult<'tcx, Values<'_, OsString, Pointer<Tag>>> {
+        Ok(self.map.values())
     }
 }
 
