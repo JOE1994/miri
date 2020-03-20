@@ -508,21 +508,6 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx
         u16vec_to_osstring(u16_vec)
     }
 
-    /// Dispatches to appropriate implementations for writing an OsString to Memory,
-    /// depending on the interpretation target.
-    fn write_os_str_to_target_str(
-        &mut self,
-        os_str: &OsStr,
-        mplace: MPlaceTy<'tcx, Tag>,
-        size: u64,
-    ) -> InterpResult<'tcx, (bool, u64)> {
-        let target_os = self.eval_context_ref().tcx.sess.target.target.target_os.as_str();
-        match target_os {
-            "linux" | "macos" => self.write_os_str_to_c_str(os_str, mplace.ptr, size),
-            "windows" => self.write_os_str_to_wide_str(os_str, mplace, size),
-            _ => throw_unsup_format!("OsString support for target OS not yet available"),
-        }
-    }
 
     /// Helper function to write an OsStr as a null-terminated sequence of bytes, which is what
     /// the Unix APIs usually handle. This function returns `Ok((false, length))` without trying
@@ -614,7 +599,7 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx
         &mut self,
         os_str: &OsStr,
         memkind: MemoryKind<MiriMemoryKind>,
-    ) -> InterpResult<'tcx, MPlaceTy<'tcx, Tag>> {
+    ) -> InterpResult<'tcx, Pointer<Tag>> {
         let target_os = self.eval_context_ref().tcx.sess.target.target.target_os.as_str();
         match target_os {
             "linux" | "macos" => self.alloc_os_str_as_c_str(os_str, memkind),
@@ -627,28 +612,28 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx
         &mut self,
         os_str: &OsStr,
         memkind: MemoryKind<MiriMemoryKind>,
-    ) -> Pointer<Tag> {
+    ) -> InterpResult<'tcx, Pointer<Tag>> {
         let size = u64::try_from(os_str.len()).unwrap().checked_add(1).unwrap(); // Make space for `0` terminator.
         let this = self.eval_context_mut();
 
         let arg_type = this.tcx.mk_array(this.tcx.types.u8, size);
         let arg_place = this.allocate(this.layout_of(arg_type).unwrap(), memkind);
         self.write_os_str_to_c_str(os_str, arg_place.ptr, size).unwrap();
-        Ok(arg_place)
+        Ok(arg_place.ptr.assert_ptr())
     }
 
     fn alloc_os_str_as_wide_str(
         &mut self,
         os_str: &OsStr,
         memkind: MemoryKind<MiriMemoryKind>,
-    ) -> InterpResult<'tcx, MPlaceTy<'tcx, Tag>> {
+    ) -> InterpResult<'tcx, Pointer<Tag>> {
         let size = os_str.len() as u64 + 1; // Make space for `0x0000` terminator.
         let this = self.eval_context_mut();
 
         let arg_type = this.tcx.mk_array(this.tcx.types.u16, size);
         let arg_place = this.allocate(this.layout_of(arg_type).unwrap(), memkind);
         self.write_os_str_to_wide_str(os_str, arg_place, size).unwrap();
-        Ok(arg_place)
+        Ok(arg_place.ptr.assert_ptr())
     }
 }
 

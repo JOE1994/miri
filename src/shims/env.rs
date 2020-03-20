@@ -13,7 +13,7 @@ use rustc_mir::interpret::Pointer;
 #[derive(Default)]
 pub struct EnvVars<'tcx> {
     /// Stores pointers to the environment variables. These variables must be stored as
-    /// null-terminated C strings with the `"{name}={value}"` format.
+    /// null-terminated target strings(c_str or wide_str) with the `"{name}={value}"` format.
     map: FxHashMap<OsString, Pointer<Tag>>,
 
     /// Place where the `environ` static is stored. Lazily initialized, but then never changes.
@@ -46,21 +46,17 @@ fn alloc_env_var_as_target_str<'mir, 'tcx>(
     let mut name_osstring = name.to_os_string();
     name_osstring.push("=");
     name_osstring.push(value);
-    Ok(ecx
-        .alloc_os_str_as_target_str(name_osstring.as_os_str(), MiriMemoryKind::Machine.into())?
-        .ptr
-        .assert_ptr())
+    Ok(ecx.alloc_os_str_as_target_str(name_osstring.as_os_str(), MiriMemoryKind::Machine.into())?)
 }
 
 impl<'mir, 'tcx> EvalContextExt<'mir, 'tcx> for crate::MiriEvalContext<'mir, 'tcx> {}
 pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx> {
-    fn getenv(&mut self, name_op: OpTy<'tcx, Tag>) -> InterpResult<'tcx, Scalar<Tag>> {
-        let this = self.eval_context_mut();
+    fn getenv(&self, name_op: OpTy<'tcx, Tag>) -> InterpResult<'tcx, Scalar<Tag>> {
+        let this = self.eval_context_ref();
 
         let name_ptr = this.read_scalar(name_op)?.not_undef()?;
         let name = this.read_os_str_from_target_str(name_ptr)?;
         Ok(match this.machine.env_vars.map.get(&name) {
-            // The offset is used to strip the "{name}=" part of the string.
             Some(var_ptr) => {
                 Scalar::from(var_ptr.offset(Size::from_bytes(u64::try_from(name.len()).unwrap().checked_add(1).unwrap()), this)?)
             }
@@ -69,8 +65,57 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx
     }
 
 
-    fn getenvironmentvariablew() {
+    fn getenvironmentvariablew(
+        &mut self,
+        name_op: OpTy<'tcx, Tag>, // LPCWSTR lpName
+        buf_op: OpTy<'tcx, Tag>, // LPWSTR  lpBuffer
+        size_op: OpTy<'tcx, Tag>, // DWORD   nSize
+    ) -> InterpResult<'tcx, u32> {
+        let this = self.eval_context_mut();
 
+        let name_ptr = this.read_scalar(name_op)?.not_undef()?;
+        let name = this.read_os_str_from_target_str(name_ptr)?;
+        Ok(match this.machine.env_vars.map.get(&name) {
+            Some(var_ptr) => {
+                // The offset is used to strip the "{name}=" part of the string.
+                let var_ptr = Scalar::from(var_ptr.offset(Size::from_bytes((name.len() as u64 + 1) * 2), this)?);
+                let buf_size = this.read_scalar(size_op)?.to_i32()? as u64;
+                let buf_ptr = this.read_scalar(buf_op)?.not_undef()?;
+                let size_u16 = Size::from_bytes(2);
+
+                // The following loop attempts to figure out the length of env_var (`var_size`)
+                let mut var_size = 0u64;
+                loop {
+                    let temp_var_ptr = var_ptr.ptr_offset(Size::from_bytes(var_size * 2), this)?;
+                    let bytes = this.memory.read_bytes(temp_var_ptr, size_u16)?;
+                    var_size += 1;
+                    // encountered 0x0000 terminator
+                    if bytes[0] == 0 && bytes[1] == 0 { break; }
+                }
+
+                let return_val = if var_size > buf_size {
+                    // If lpBuffer is not large enough to hold the data, the return value is the buffer size, in characters,
+                    // required to hold the string and its terminating null character and the contents of lpBuffer are undefined.
+                    var_size
+                } else {
+                    for i in 0..var_size {
+                        this.memory.copy(
+                            this.force_ptr(var_ptr.ptr_offset(Size::from_bytes(i * 2), this)?)?,
+                            this.force_ptr(buf_ptr.ptr_offset(Size::from_bytes(i * 2), this)?)?,
+                            size_u16,
+                            true,
+                        )?;
+                    }
+                    // If the function succeeds, the return value is the number of characters stored in the buffer pointed to by lpBuffer,
+                    // not including the terminating null character.
+                    var_size - 1
+                };
+                assert_eq!(return_val as u32 as u64, return_val);
+                return_val as u32
+            }
+            // return zero upon failure
+            None => 0u32
+        })
     }
 
     fn setenv(
@@ -97,14 +142,19 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx
                     .deallocate(var, None, MiriMemoryKind::Machine.into())?;
             }
             this.update_environ()?;
-            Ok(0)
+            Ok(0) // return zero on success
         } else {
             Ok(-1)
         }
     }
 
-    fn setenvironmentvariablew() {
-
+    fn setenvironmentvariablew(
+        &mut self,
+        name_op: OpTy<'tcx, Tag>, // LPCWSTR lpName,
+        value_op: OpTy<'tcx, Tag>, // LPCWSTR lpValue,
+    ) -> InterpResult<'tcx, i32> {
+        // return non-zero on success
+        self.setenv(name_op, value_op).map(|x| x + 1)
     }
 
     fn unsetenv(&mut self, name_op: OpTy<'tcx, Tag>) -> InterpResult<'tcx, i32> {
