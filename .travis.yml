@@ -10,6 +10,7 @@ cache:
 os:
 - linux
 - osx
+- windows
 dist: xenial
 
 # Run in PRs and for bors, but not on master.
