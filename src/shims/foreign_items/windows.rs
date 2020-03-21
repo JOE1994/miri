@@ -1,5 +1,6 @@
 use crate::*;
 use crate::rustc_target::abi::LayoutOf;
+use crate::helpers::u16vec_to_osstring;
 use rustc::mir;
 use rustc::ty::layout::Size;
 use std::iter;
@@ -44,14 +45,14 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx
                 for &item in this.machine.env_vars.values()? {
                     let env_var = this.read_os_str_from_target_str(Scalar::from(item))?;
                     env_vars.push(env_var);
-                    env_vars.push(" ");
+                    env_vars.push(u16vec_to_osstring(vec![0x0000 as u16])?);
                 }
 
                 // Allocate environment block
                 let tcx = this.tcx;
                 let env_block_size = env_vars.len() + 1;
                 let env_block_type = tcx.mk_array(tcx.types.u16, u64::try_from(env_block_size).unwrap());
-                let env_block_place = this.allocate(this.layout_of(env_block_type)?, MiriMemoryKind::Machine.into());
+                let env_block_place = this.allocate(this.layout_of(env_block_type)?, MiriMemoryKind::WinHeap.into());
                 
                 // Store environment variables to environment block
                 // Final null terminator(block terminator) is pushed by `write_os_str_to_wide_str`
@@ -62,8 +63,8 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx
             }
 
             "FreeEnvironmentStringsW" => {
-                // let old_vars_ptr = this.read_scalar(args[0])?.not_undef()?;
-                // this.memory.deallocate(this.force_ptr(old_vars_ptr)?, None, MiriMemoryKind::Machine.into())?;
+                let old_vars_ptr = this.read_scalar(args[0])?.not_undef()?;
+                this.memory.deallocate(this.force_ptr(old_vars_ptr)?, None, MiriMemoryKind::WinHeap.into())?;
             }
 
             // File related shims

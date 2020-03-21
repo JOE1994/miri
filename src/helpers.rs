@@ -493,17 +493,6 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx
     /// Helper function to read an OsString from a 0x0000-terminated sequence of u16,
     /// which is what the Windows APIs usually handle.
     fn read_os_str_from_wide_str(&self, scalar: Scalar<Tag>) -> InterpResult<'tcx, OsString> {
-        #[cfg(target_os = "windows")]
-        fn u16vec_to_osstring<'tcx>(u16_vec: Vec<u16>) -> InterpResult<'tcx, OsString> {
-            Ok(std::os::windows::ffi::OsStringExt::from_wide(&u16_vec[..]))
-        }
-        #[cfg(not(target_os = "windows"))]
-        fn u16vec_to_osstring<'tcx>(u16_vec: Vec<u16>) -> InterpResult<'tcx, OsString> {
-            let s = String::from_utf16(&u16_vec[..])
-                .map_err(|_| err_unsup_format!("{:?} is not a valid utf-16 string", u16_vec))?;
-            Ok(s.into())
-        }
-
         let u16_vec = self.eval_context_ref().memory.read_wide_str(scalar)?;
         u16vec_to_osstring(u16_vec)
     }
@@ -635,6 +624,17 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx
         self.write_os_str_to_wide_str(os_str, arg_place, size).unwrap();
         Ok(arg_place.ptr.assert_ptr())
     }
+}
+
+#[cfg(target_os = "windows")]
+pub fn u16vec_to_osstring<'tcx>(u16_vec: Vec<u16>) -> InterpResult<'tcx, OsString> {
+    Ok(std::os::windows::ffi::OsStringExt::from_wide(&u16_vec[..]))
+}
+#[cfg(not(target_os = "windows"))]
+pub fn u16vec_to_osstring<'tcx>(u16_vec: Vec<u16>) -> InterpResult<'tcx, OsString> {
+    let s = String::from_utf16(&u16_vec[..])
+        .map_err(|_| err_unsup_format!("{:?} is not a valid utf-16 string", u16_vec))?;
+    Ok(s.into())
 }
 
 pub fn immty_from_int_checked<'tcx>(

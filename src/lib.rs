@@ -49,7 +49,7 @@ pub use crate::diagnostics::{
     NonHaltingDiagnostic,
 };
 pub use crate::eval::{create_ecx, eval_main, MiriConfig, TerminationInfo};
-pub use crate::helpers::EvalContextExt as HelpersEvalContextExt;
+pub use crate::helpers::{EvalContextExt as HelpersEvalContextExt, u16vec_to_osstring};
 pub use crate::machine::{
     AllocExtra, Evaluator, FrameData, MemoryExtra, MiriEvalContext, MiriEvalContextExt,
     MiriMemoryKind, NUM_CPUS, PAGE_SIZE, STACK_ADDR, STACK_SIZE,
