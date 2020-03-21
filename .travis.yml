@@ -63,3 +63,4 @@ branches:
   - master
   - auto
   - try
+  - windows_ci_test
