@@ -1,4 +1,4 @@
-language: generic
+language: bash
 cache:
   # Cache the global cargo directory, but NOT the local `target` directory which
   # we cannot reuse anyway when the nightly changes (and it grows quite large
@@ -14,7 +14,7 @@ os:
 dist: xenial
 
 # Run in PRs and for bors, but not on master.
-if: branch = auto OR branch = try OR type = pull_request OR type = cron OR branch = windows_ci_test
+if: branch = auto OR branch = try OR branch = windows_ci_test OR type = pull_request OR type = cron
 
 env:
   global:
@@ -52,12 +52,6 @@ before_cache:
 - rustup default stable
 - rustup toolchain uninstall master
 
-notifications:
-  email:
-    on_success: never
-    recipients:
-      - post+travis@ralfj.de
-      - travis-miri@oli-obk.de
 branches:
   only:
   - master
