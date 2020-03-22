@@ -9,11 +9,11 @@ cache:
 
 os:
 - osx
-- windows
+# - windows
 dist: xenial
 
 # Run in PRs and for bors, but not on master.
-if: branch = auto OR branch = try OR type = pull_request OR type = cron # OR branch = windows_ci_test
+if: branch = windows_ci_test OR type = pull_request OR type = cron
 
 env:
   global:
