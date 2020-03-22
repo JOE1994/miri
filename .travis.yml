@@ -7,10 +7,18 @@ cache:
     - $HOME/.cargo
     - $HOME/.rustup
 
-os:
-- windows
-- osx
-dist: xenial
+jobs:
+  include:
+    - os: windows
+    - os: linux
+      dist: xenial
+    - os: osx
+      osx_image: xcode7.2
+
+#os:
+#- windows
+#- osx
+#dist: xenial
 
 # Run in PRs and for bors, but not on master.
 if: branch = windows_ci_test OR type = pull_request OR type = cron OR branch = auto OR branch = try
