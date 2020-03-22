@@ -817,7 +817,10 @@ pub trait EvalContextExt<'mir, 'tcx: 'mir>: crate::MiriEvalContextExt<'mir, 'tcx
 
         let path = this.read_os_str_from_c_str(this.read_scalar(path_op)?.not_undef()?)?;
 
+        #[cfg(target_family = "unix")]
         let mut builder = DirBuilder::new();
+        #[cfg(not(target_family = "unix"))]
+        let builder = DirBuilder::new();
 
         // If the host supports it, forward on the mode of the directory
         // (i.e. permission bits and the sticky bit)
