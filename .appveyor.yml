@@ -10,6 +10,7 @@ branches:
   only:
     - auto
     - try
+    - win-cross
 
 matrix:
   fast_finish: true     # set this flag to immediately finish build once one of the jobs fails.
@@ -53,7 +54,7 @@ test_script:
     - cd test-cargo-miri
     - '"C:\msys64\mingw64\bin\python3.exe" run-test.py'
     - cd ..
-    - set "MIRI_SYSROOT="
+    # - set "MIRI_SYSROOT="
     # Test foreign miri: 64bit Linux
     - cargo miri setup --target x86_64-unknown-linux-gnu
     - set MIRI_SYSROOT=%USERPROFILE%\AppData\Local\rust-lang\miri\cache
@@ -62,7 +63,7 @@ test_script:
     - cd test-cargo-miri
     - '"C:\msys64\mingw64\bin\python3.exe" run-test.py'
     - cd ..
-    - set "MIRI_SYSROOT="
+    # - set "MIRI_SYSROOT="
     # Test foreign miri: 64bit macOS
     - cargo miri setup --target x86_64-apple-darwin
     - set MIRI_SYSROOT=%USERPROFILE%\AppData\Local\rust-lang\miri\cache
@@ -71,7 +72,7 @@ test_script:
     - cd test-cargo-miri
     - '"C:\msys64\mingw64\bin\python3.exe" run-test.py'
     - cd ..
-    - set "MIRI_SYSROOT="
+    # - set "MIRI_SYSROOT="
 
 after_test:
     # Don't cache "master" toolchain, it's a waste
